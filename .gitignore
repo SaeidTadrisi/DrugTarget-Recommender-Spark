@@ -1,0 +1,21 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+
+# Data files
+data/
+*.csv
+*.json
+*.parquet
+
+# Spark logs
+spark-warehouse/
+metastore_db/
+derby.log
