@@ -1,22 +1,19 @@
-import os
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import StringIndexer
+from pyspark.ml.recommendation import ALS
 from pyspark.sql import SparkSession
+from pyspark.sql.types import FloatType
 
 # ---------------------------------------------------------
 # Configuration (MongoDB & Spark)
 # ---------------------------------------------------------
 MONGO_URI = "mongodb://localhost:27017/bio_recommender_db.patients_interactions"
-
-# Depending on your PySpark version, the connector version might vary.
-# We use the modern MongoDB Spark Connector (v10+)
 MONGO_SPARK_CONNECTOR = "org.mongodb.spark:mongo-spark-connector_2.13:11.1.0"
 
-def create_spark_session():
-    """
-    Initialize Apache Spark Session and inject the MongoDB Connector.
-    """
-    print("Initializing Apache Spark Session (This might take a minute to download packages)...")
 
-    # Create Spark Session with MongoDB packages configured
+def create_spark_session():
+    """Initialize Apache Spark Session."""
+    print("Initializing Apache Spark Session...")
     spark = SparkSession.builder \
         .appName("DrugTargetRecommenderALS") \
         .config("spark.jars.packages", MONGO_SPARK_CONNECTOR) \
@@ -25,48 +22,87 @@ def create_spark_session():
         .config("spark.driver.memory", "4g") \
         .getOrCreate()
 
-    # Set log level to ERROR to keep the console clean from Spark's verbose INFO logs
     spark.sparkContext.setLogLevel("ERROR")
-    print("Spark Session initialized successfully!")
-
     return spark
 
 
-def test_mongodb_connection(spark):
+def load_data(spark):
+    """Load data from MongoDB."""
+    print("Loading data from MongoDB...")
+    df = spark.read.format("mongodb").load()
+
+    # Cast ReactionScore to Float (Required by ALS algorithm)
+    df = df.withColumn("ReactionScore", df["ReactionScore"].cast(FloatType()))
+    return df
+
+
+def train_recommender_model(df):
     """
-    Test reading data directly from MongoDB into a Spark DataFrame.
+    Build and train the ALS Recommender Pipeline.
+    1. Convert String IDs to Numeric Indices (StringIndexer)
+    2. Train the Alternating Least Squares (ALS) model
     """
-    print("Attempting to read data from MongoDB...")
+    print("Preparing Data Pipeline for Machine Learning...")
 
-    try:
-        # Load data from MongoDB
-        df = spark.read \
-            .format("mongodb") \
-            .load()
+    # Initialize Indexers for String to Integer conversion
+    patient_indexer = StringIndexer(inputCol="PatientID", outputCol="patient_idx", handleInvalid="keep")
+    drug_indexer = StringIndexer(inputCol="DrugID", outputCol="drug_idx", handleInvalid="keep")
 
-        print(f"Successfully loaded {df.count()} records from MongoDB.")
-        print("🔍 Showing the first 5 records:")
+    # Initialize ALS Model
+    als = ALS(
+        maxIter=10,  # Number of iterations
+        regParam=0.1,  # Regularization parameter to prevent overfitting
+        userCol="patient_idx",  # The numeric patient column
+        itemCol="drug_idx",  # The numeric drug column
+        ratingCol="ReactionScore",  # The reaction score
+        coldStartStrategy="drop"  # Drop NaN values in predictions
+    )
 
-        # Show top 5 rows
-        df.show(5)
+    # Create the Machine Learning Pipeline
+    pipeline = Pipeline(stages=[patient_indexer, drug_indexer, als])
 
-        return df
-    except Exception as e:
-        print("Error connecting Spark to MongoDB. Details:")
-        print(e)
-        exit(1)
+    print("Training the ALS Model (This requires high CPU usage)...")
+    # Fit the pipeline to the data
+    model = pipeline.fit(df)
+    print("Model training completed successfully!")
+
+    return model
+
+
+def generate_recommendations(model):
+    """Generate top 3 drug recommendations for all patients."""
+    print("Generating novel drug-target predictions...")
+
+    # Extract the trained ALS model from the Pipeline (it's the last stage)
+    als_model = model.stages[-1]
+
+    # Generate top 3 drug recommendations for each user
+    user_recs = als_model.recommendForAllUsers(3)
+
+    print("Top 3 Recommended Drugs for Patients:")
+    user_recs.show(10, truncate=False)
 
 
 def main():
-    """Main execution flow for Spark Recommender Initialization."""
+    """Main execution flow."""
     spark = create_spark_session()
 
-    # Test the connection and Data Loading
-    df = test_mongodb_connection(spark)
+    try:
+        # 1. Load Data
+        df = load_data(spark)
 
-    # Stop Spark gracefully
-    spark.stop()
-    print("Spark Session gracefully stopped.")
+        # 2. Train Model
+        trained_pipeline_model = train_recommender_model(df)
+
+        # 3. Generate Predictions
+        generate_recommendations(trained_pipeline_model)
+
+    except Exception as e:
+        print("An error occurred during the ML pipeline execution:")
+        print(e)
+    finally:
+        spark.stop()
+        print("Spark Session gracefully stopped.")
 
 
 if __name__ == "__main__":
