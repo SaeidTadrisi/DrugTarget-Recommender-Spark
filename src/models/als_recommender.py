@@ -1,108 +1,124 @@
-from pyspark.ml import Pipeline
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 from pyspark.ml.feature import StringIndexer
 from pyspark.ml.recommendation import ALS
-from pyspark.sql import SparkSession
-from pyspark.sql.types import FloatType
+from pyspark.ml.evaluation import RegressionEvaluator, BinaryClassificationEvaluator
+from pyspark.ml import Pipeline
 
-# ---------------------------------------------------------
-# Configuration (MongoDB & Spark)
-# ---------------------------------------------------------
-MONGO_URI = "mongodb://localhost:27017/bio_recommender_db.patients_interactions"
+# Configuration
+MONGO_URI = "mongodb://localhost:27017/bio_recommender_db.integrated_interactions"
 MONGO_SPARK_CONNECTOR = "org.mongodb.spark:mongo-spark-connector_2.13:11.1.0"
 
 
 def create_spark_session():
-    """Initialize Apache Spark Session."""
-    print("Initializing Apache Spark Session...")
+    print("Initializing PySpark ML Environment...")
     spark = SparkSession.builder \
-        .appName("DrugTargetRecommenderALS") \
+        .appName("Advanced_DTI_ALS") \
         .config("spark.jars.packages", MONGO_SPARK_CONNECTOR) \
         .config("spark.mongodb.read.connection.uri", MONGO_URI) \
-        .config("spark.mongodb.write.connection.uri", MONGO_URI) \
-        .config("spark.driver.memory", "4g") \
+        .config("spark.driver.memory", "8g") \
+        .config("spark.executor.memory", "8g") \
         .getOrCreate()
-
     spark.sparkContext.setLogLevel("ERROR")
+    spark.sparkContext.setCheckpointDir("./spark_checkpoints")
     return spark
 
 
 def load_data(spark):
-    """Load data from MongoDB."""
-    print("Loading data from MongoDB...")
+    print("Loading harmonized DTI data from MongoDB...")
     df = spark.read.format("mongodb").load()
-
-    # Cast ReactionScore to Float (Required by ALS algorithm)
-    df = df.withColumn("ReactionScore", df["ReactionScore"].cast(FloatType()))
     return df
 
 
-def train_recommender_model(df):
-    """
-    Build and train the ALS Recommender Pipeline.
-    1. Convert String IDs to Numeric Indices (StringIndexer)
-    2. Train the Alternating Least Squares (ALS) model
-    """
-    print("Preparing Data Pipeline for Machine Learning...")
+def train_and_evaluate_als(df):
+    print("Preparing DTI Pipeline (Drug & Target Indexing)...")
 
-    # Initialize Indexers for String to Integer conversion
-    patient_indexer = StringIndexer(inputCol="PatientID", outputCol="patient_idx", handleInvalid="keep")
+    # 1. Index Strings to Numeric (ALS requirement)
     drug_indexer = StringIndexer(inputCol="DrugID", outputCol="drug_idx", handleInvalid="keep")
+    target_indexer = StringIndexer(inputCol="TargetID", outputCol="target_idx", handleInvalid="keep")
 
-    # Initialize ALS Model
+    # Apply indexing
+    pipeline = Pipeline(stages=[drug_indexer, target_indexer])
+    indexed_df = pipeline.fit(df).transform(df)
+
+    # 2. Train-Test Split (80% Train, 20% Test)
+    print("Splitting data into Training (80%) and Testing (20%) sets...")
+    (training, test) = indexed_df.randomSplit([0.8, 0.2], seed=42)
+
+    # 3. Build ALS Model (IMPLICIT FEEDBACK architecture)
+    print("Training Implicit ALS Model (Addressing Sparsity)...")
     als = ALS(
-        maxIter=10,  # Number of iterations
-        regParam=0.1,  # Regularization parameter to prevent overfitting
-        userCol="patient_idx",  # The numeric patient column
-        itemCol="drug_idx",  # The numeric drug column
-        ratingCol="ReactionScore",  # The reaction score
-        coldStartStrategy="drop"  # Drop NaN values in predictions
+        maxIter=15,
+        regParam=0.05,
+        alpha=40.0,  # Confidence parameter for implicit feedback
+        implicitPrefs=True,  # CRITICAL: Treats scores as confidence of interaction, not exact ratings
+        userCol="drug_idx",
+        itemCol="target_idx",
+        ratingCol="NormalizedScore",
+        coldStartStrategy="drop"
     )
 
-    # Create the Machine Learning Pipeline
-    pipeline = Pipeline(stages=[patient_indexer, drug_indexer, als])
+    model = als.fit(training)
 
-    print("Training the ALS Model (This requires high CPU usage)...")
-    # Fit the pipeline to the data
-    model = pipeline.fit(df)
-    print("Model training completed successfully!")
+    # 4. Generate Predictions on Test Set
+    predictions = model.transform(test)
+    print("Checkpointing predictions to break lineage graph and prevent StackOverflow...")
+    predictions = predictions.checkpoint()
 
-    return model
+    # 5. Advanced Evaluation (Master's Degree Level)
+    print("Evaluating Model Performance...")
 
+    # Drop null predictions (Crucial for Cold Start items)
+    predictions = predictions.dropna(subset=["prediction"])
 
-def generate_recommendations(model):
-    """Generate top 3 drug recommendations for all patients."""
-    print("Generating novel drug-target predictions...")
+    # Metric 1: RMSE
+    evaluator_rmse = RegressionEvaluator(metricName="rmse", labelCol="NormalizedScore", predictionCol="prediction")
+    rmse = evaluator_rmse.evaluate(predictions)
 
-    # Extract the trained ALS model from the Pipeline (it's the last stage)
-    als_model = model.stages[-1]
+    # Metric 2: AUPR (Using modern DataFrame API - Safe from StackOverflow due to Checkpoint)
+    print("Calculating AUPR (Using Native JVM DataFrame Engine)...")
 
-    # Generate top 3 drug recommendations for each user
-    user_recs = als_model.recommendForAllUsers(3)
+    binarized_predictions = predictions.withColumn(
+        "TrueLabel", F.when(F.col("NormalizedScore") >= 3.0, 1.0).otherwise(0.0)
+    ).withColumn("prediction", F.col("prediction").cast("double"))
 
-    print("Top 3 Recommended Drugs for Patients:")
-    user_recs.show(10, truncate=False)
+    evaluator_aupr = BinaryClassificationEvaluator(
+        rawPredictionCol="prediction", labelCol="TrueLabel", metricName="areaUnderPR"
+    )
+    aupr = evaluator_aupr.evaluate(binarized_predictions)
+
+    print("========================================")
+    print(f"Root Mean Square Error (RMSE): {rmse:.4f}")
+    print(f"Area Under PR Curve (AUPR):    {aupr:.4f} (Closer to 1.0 is better)")
+    print("========================================")
+
+    return model, pipeline
 
 
 def main():
-    """Main execution flow."""
     spark = create_spark_session()
 
     try:
-        # 1. Load Data
         df = load_data(spark)
+        model, indexer_pipeline = train_and_evaluate_als(df)
 
-        # 2. Train Model
-        trained_pipeline_model = train_recommender_model(df)
-
-        # 3. Generate Predictions
-        generate_recommendations(trained_pipeline_model)
+        # Display top 3 novel drug recommendations for 5 target proteins
+        print("Generating Top 3 Novel Drug Candidates for Sample Targets...")
+        target_recs = model.recommendForAllItems(3)  # items = targets
+        target_recs.show(5, truncate=False)
+        print("Saving predicted recommendations to MongoDB...")
+        target_recs.write \
+            .format("mongodb") \
+            .option("spark.mongodb.write.connection.uri",
+                    "mongodb://localhost:27017/bio_recommender_db.predicted_interactions") \
+            .mode("overwrite") \
+            .save()
+        print("Predictions saved successfully!")
 
     except Exception as e:
-        print("An error occurred during the ML pipeline execution:")
-        print(e)
+        print(f"Error: {e}")
     finally:
         spark.stop()
-        print("Spark Session gracefully stopped.")
 
 
 if __name__ == "__main__":

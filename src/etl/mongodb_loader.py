@@ -1,77 +1,134 @@
 import os
-import pandas as pd
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 # ---------------------------------------------------------
-# Path Configurations (Dynamic & Robust)
+# Dynamic Paths
 # ---------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
-GENERATED_DATA_DIR = os.path.join(PROJECT_ROOT, "data", "generated")
-INPUT_FILE = os.path.join(GENERATED_DATA_DIR, "patient_drug_interactions.csv")
+RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "data", "raw")
 
 # ---------------------------------------------------------
-# MongoDB Configurations
+# Configuration
 # ---------------------------------------------------------
-MONGO_URI = "mongodb://localhost:27017/"
-DB_NAME = "bio_recommender_db"
-COLLECTION_NAME = "patients_interactions"
+MONGO_URI = "mongodb://localhost:27017/bio_recommender_db.integrated_interactions"
+MONGO_SPARK_CONNECTOR = "org.mongodb.spark:mongo-spark-connector_2.13:11.1.0"
 
 
-def get_mongo_client():
-    """Establish and verify connection to MongoDB."""
-    print("Connecting to MongoDB...")
-    try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        # Force a call to the server to verify connection
-        client.admin.command('ping')
-        print("Successfully connected to MongoDB locally.")
-        return client
-    except ConnectionFailure:
-        print("Error: Could not connect to MongoDB. Is the service running on port 27017?")
-        exit(1)
+
+def create_spark_session():
+    print("Initializing PySpark for Data Fusion...")
+    spark = SparkSession.builder \
+        .appName("BigData_Harmonization_ETL") \
+        .config("spark.jars.packages", MONGO_SPARK_CONNECTOR) \
+        .config("spark.mongodb.write.connection.uri", MONGO_URI) \
+        .config("spark.driver.memory", "8g") \
+        .config("spark.executor.memory", "8g") \
+        .getOrCreate()
+    spark.sparkContext.setLogLevel("ERROR")
+    return spark
 
 
-def load_data_to_mongodb():
-    """
-    ETL Process:
-    Extract data from CSV, Transform to Dictionary, Load into MongoDB.
-    """
-    if not os.path.exists(INPUT_FILE):
-        print(f"Error: Input file not found at {INPUT_FILE}")
-        print("Please run the data generation script first.")
-        exit(1)
+def process_and_normalize_dataset(spark, file_name, file_format, drug_col, target_col, score_col, dataset_name):
+    file_path = os.path.join(RAW_DATA_DIR, file_name)
+    if not os.path.exists(file_path):
+        return None
 
-    print(f"Reading data from {INPUT_FILE}...")
-    df = pd.read_csv(INPUT_FILE)
+    print(f"Loading and transforming {file_name}...")
+    sep = "\t" if file_format == "tsv" else ","
+    df = spark.read.csv(file_path, header=True, inferSchema=True, sep=sep)
 
-    # Transform: Convert DataFrame rows to a list of dictionaries (JSON-like format for NoSQL)
-    records = df.to_dict(orient='records')
-    print(f"Transformed {len(records)} rows into NoSQL documents.")
+    # Standardize columns (using string cast for SMILES and Sequences)
+    df = df.select(
+        F.col(drug_col).cast("string").alias("DrugID"),
+        F.col(target_col).cast("string").alias("TargetID"),
+        F.col(score_col).cast("float").alias("RawScore")
+    )
+    df = df.withColumn("Source", F.lit(dataset_name))
 
-    client = get_mongo_client()
-    db = client[DB_NAME]
-    collection = db[COLLECTION_NAME]
+    # Drop nulls and zero/negative values (log10 of <=0 is mathematically undefined)
+    df = df.filter((F.col("RawScore").isNotNull()) & (F.col("RawScore") > 0))
 
-    print(f"Loading data into Database: '{DB_NAME}' -> Collection: '{COLLECTION_NAME}'...")
+    # ---------------------------------------------------------
+    # BIOINFORMATICS CORRECTION: The p-scale transformation
+    # ---------------------------------------------------------
+    # For TSV files (nM concentration), lower is better. We apply: 9 - log10(X)
+    # For Davis/KIBA, higher is already better, so we keep RawScore.
+    if dataset_name in ["IC50", "Kd", "Ki", "EC50"]:
+        df = df.withColumn("AffinityScore", 9.0 - F.log10(F.col("RawScore")))
+    else:
+        df = df.withColumn("AffinityScore", F.col("RawScore"))
 
-    # Clear the collection first to avoid duplicate data if script is run multiple times
-    collection.delete_many({})
+    # --- MIN-MAX NORMALIZATION (Scaling p-scale to 1-5 for ALS) ---
+    window_spec = Window.partitionBy("Source")
+    df = df.withColumn("MaxScore", F.max("AffinityScore").over(window_spec)) \
+        .withColumn("MinScore", F.min("AffinityScore").over(window_spec))
 
-    # Load: Insert the data into MongoDB
-    collection.insert_many(records)
+    df = df.withColumn(
+        "NormalizedScore",
+        F.when(F.col("MaxScore") == F.col("MinScore"), F.lit(3.0))
+        .otherwise(((F.col("AffinityScore") - F.col("MinScore")) / (F.col("MaxScore") - F.col("MinScore")) * 4) + 1)
+    )
 
-    print(f"Success! Inserted {len(records)} interaction documents into MongoDB.")
-
-    # Verify insertion
-    count = collection.count_documents({})
-    print(f"Total documents in collection now: {count}")
+    return df.select("DrugID", "TargetID", "NormalizedScore", "Source")
 
 
 def main():
-    """Main execution flow for ETL."""
-    load_data_to_mongodb()
+    spark = create_spark_session()
+    # Define the schemas based on exact column names in the files
+    datasets_config = [
+        {"file": "davis_all.csv", "format": "csv", "d_col": "compound_iso_smiles", "t_col": "target_sequence",
+         "s_col": "affinity", "name": "Davis"},
+        {"file": "kiba_all.csv", "format": "csv", "d_col": "compound_iso_smiles", "t_col": "target_sequence",
+         "s_col": "affinity", "name": "KIBA"},
+        {"file": "IC50_bind.tsv", "format": "tsv", "d_col": "drug_id", "t_col": "target_id", "s_col": "affinity",
+         "name": "IC50"},
+        {"file": "Kd_bind.tsv", "format": "tsv", "d_col": "drug_id", "t_col": "target_id", "s_col": "affinity",
+         "name": "Kd"},
+        {"file": "Ki_bind.tsv", "format": "tsv", "d_col": "drug_id", "t_col": "target_id", "s_col": "affinity",
+         "name": "Ki"},
+        {"file": "EC50_bind.tsv", "format": "tsv", "d_col": "drug_id", "t_col": "target_id", "s_col": "affinity",
+         "name": "EC50"}
+    ]
+
+    dataframes = []
+
+    # Process each dataset
+    for config in datasets_config:
+        df = process_and_normalize_dataset(
+            spark, config["file"], config["format"],
+            config["d_col"], config["t_col"], config["s_col"], config["name"]
+        )
+        if df is not None:
+            dataframes.append(df)
+
+    if not dataframes:
+        print("Error: No datasets were found in the raw folder!")
+        return
+
+    # Fusion: Union all dataframes together
+    print("Fusing all datasets into a single massive graph...")
+    master_df = dataframes[0]
+    for df in dataframes[1:]:
+        master_df = master_df.union(df)
+
+    total_records = master_df.count()
+    print(f"Total integrated interactions: {total_records}")
+
+    # Show a sample of the harmonized data
+    master_df.show(10, truncate=False)
+
+    # Save to MongoDB
+    print("Saving harmonized Big Data to MongoDB...")
+    master_df.write \
+        .format("mongodb") \
+        .mode("overwrite") \
+        .save()
+
+    print("Success! ETL Data Fusion Pipeline completed.")
+    spark.stop()
 
 
 if __name__ == "__main__":
