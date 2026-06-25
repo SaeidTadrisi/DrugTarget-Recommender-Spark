@@ -15,7 +15,14 @@ data/
 *.json
 *.parquet
 
+
 # Spark logs
 spark-warehouse/
 metastore_db/
 derby.log
+
+# Spark Checkpoints
+spark_checkpoints/
+
+lib/
+/frontend/dti_graph.html
