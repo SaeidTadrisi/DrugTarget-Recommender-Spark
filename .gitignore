@@ -26,3 +26,4 @@ spark_checkpoints/
 
 lib/
 /src/frontend/dti_graph.html
+.env
