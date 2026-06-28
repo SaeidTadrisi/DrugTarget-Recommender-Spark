@@ -25,4 +25,4 @@ derby.log
 spark_checkpoints/
 
 lib/
-/frontend/dti_graph.html
+/src/frontend/dti_graph.html
