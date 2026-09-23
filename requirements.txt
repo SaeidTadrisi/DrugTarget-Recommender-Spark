@@ -8,3 +8,4 @@ python-dotenv>=1.0
 requests>=2.31
 rdkit>=2023.9.5
 pyspark>=3.5
+pytest>=8.0
