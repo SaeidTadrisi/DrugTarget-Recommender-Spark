@@ -1,9 +1,12 @@
-import streamlit as st
-from pymongo import MongoClient
 import os
+import streamlit as st
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-DB_NAME   = os.getenv("MONGO_DB",  "bio_recommender_db")
+DB_NAME = os.getenv("MONGO_DB", "bio_recommender_db")
 
 @st.cache_resource
 def get_db():

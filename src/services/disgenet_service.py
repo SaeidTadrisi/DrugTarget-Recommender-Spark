@@ -2,7 +2,10 @@ import os
 import requests
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 from services.uniprot_service import get_entry_info
+
+load_dotenv()
 
 DISGENET_API   = "https://api.disgenet.com/api/v1"
 DISGENET_TOKEN = os.getenv("DISGENET_API_KEY", "")
