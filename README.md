@@ -64,35 +64,35 @@ This project was developed in an academic **Big Data Management** context and ex
 
 The recommendations view displays the selected target, top-five ALS candidates, predicted scores, ranking visualization, score decay, and CSV export.
 
-![Recommendation results](docs/images/recommendations-overview-6.jpg)
+![Recommendation results](docs/images/recommendations-overview-6.png)
 
 ### Interaction Network
 
 The network view shows the selected target, ALS-recommended compounds, and STRING protein–protein interaction neighbors. Edge thickness represents predicted score or network confidence, depending on the data source.
 
-![Interaction network](docs/images/interaction-network-5.jpg)
+![Interaction network](docs/images/interaction-network-5.png)
 
 ### Compound Chemistry
 
 The chemistry view resolves a lead compound where possible, renders its 2D molecular structure with RDKit, calculates physicochemical properties, and evaluates the Lipinski Rule of Five.
 
-![Compound chemistry](docs/images/chemistry-analysis-4.jpg)
+![Compound chemistry](docs/images/chemistry-analysis-4.png)
 
 ### Disease Context
 
 For human UniProt targets, the application maps the selected accession to a gene symbol and queries DisGeNET when an API key is available. When no association is returned, the dashboard shows that result explicitly.
 
-![Disease context](docs/images/disease-context-3.jpg)
+![Disease context](docs/images/disease-context-3.png)
 
 ### Dataset Analytics
 
 The analytics dashboard visualizes source composition and the affinity p-scale transformation.
 
-![Dataset analytics](docs/images/dataset-analytics-top-2.jpg)
+![Dataset analytics](docs/images/dataset-analytics-top-2.png)
 
 It also documents the Spark ALS workflow, selected-target score distribution, source-quality annotations, and cumulative data volume.
 
-![Dataset analytics pipeline](docs/images/dataset-analytics-pipeline-1.jpg)
+![Dataset analytics pipeline](docs/images/dataset-analytics-pipeline-1.png)
 
 ---
 
