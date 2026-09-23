@@ -1,18 +1,13 @@
 # 🧬 Drug–Target Interaction Explorer
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/Apache%20Spark-3.x-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white" alt="Apache Spark">
-  <img src="https://img.shields.io/badge/MongoDB-NoSQL-47A248?style=for-the-badge&logo=mongodb&logoColor=white" alt="MongoDB">
-  <img src="https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" alt="Streamlit">
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Spark%20MLlib-ALS%20Recommender-FC4C02?style=flat-square" alt="Spark MLlib ALS">
-  <img src="https://img.shields.io/badge/RDKit-Chemistry-2E7D32?style=flat-square" alt="RDKit">
-  <img src="https://img.shields.io/badge/Tests-4%20passing-0A9F5B?style=flat-square&logo=pytest&logoColor=white" alt="Tests">
-  <img src="https://img.shields.io/badge/Status-Local%20Demo-6B7280?style=flat-square" alt="Local demo">
-</p>
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://www.python.org/)
+[![PySpark](https://img.shields.io/badge/Big%20Data-PySpark-E25A1C?logo=apachespark)](https://spark.apache.org/docs/latest/api/python/)
+[![Spark MLlib](https://img.shields.io/badge/ML-Spark%20MLlib%20ALS-FC4C02?logo=apachespark)](https://spark.apache.org/mllib/)
+[![MongoDB](https://img.shields.io/badge/Database-MongoDB-47A248?logo=mongodb)](https://www.mongodb.com/)
+[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?logo=streamlit)](https://streamlit.io/)
+[![RDKit](https://img.shields.io/badge/Chemistry-RDKit-2E7D32)](https://www.rdkit.org/)
+[![Tests](https://img.shields.io/badge/Tests-pytest%20%7C%204%20passing-25A162?logo=pytest)](https://pytest.org/)
+[![License](https://img.shields.io/badge/License-Not%20specified-lightgrey)](#license)
 
 An end-to-end **bioinformatics and big-data application** for exploring drug–target interaction (DTI) data, generating ranked candidate compounds with **Apache Spark ALS**, and enriching predictions with protein-network, chemistry, and disease context.
 
